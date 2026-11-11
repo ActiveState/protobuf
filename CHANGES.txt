@@ -1,3 +1,22 @@
+2026-11-10 version 3.17.3.post1 (Python; ActiveState security release)
+  Security fixes backported to the last protobuf line that supports Python 2.7.
+  Python package only; the C++ library version stays 3.17.3.
+
+  C++ (also the Python C++ extension, google.protobuf.pyext._message)
+  * CVE-2022-1941 / GHSA-8gq9-2x98-w8hf: parsing a MessageSet item with
+    duplicate type_id or message fields could build a corrupted extension and
+    crash later. The parsers now keep the first type_id and payload and skip
+    duplicates (upstream 3.18.3).
+
+  Python
+  * CVE-2025-4565 / GHSA-8qvm-5x2c-j2w7: the pure-Python parser now limits
+    nesting of messages, groups, map entries, MessageSet items and unknown
+    groups to 100 and raises DecodeError past it, instead of exhausting the
+    interpreter stack. decoder.SetRecursionLimit() changes the limit.
+  * CVE-2026-0994 / GHSA-7gcm-g887-7qv7: json_format.Parse()/ParseDict() take
+    max_recursion_depth (default 100) and raise ParseError past it, including
+    through nested google.protobuf.Any, Struct and ListValue.
+
 2021-06-04 version 3.17.3 (C++/Java/Python/PHP/Objective-C/C#/Ruby/JavaScript)
   C++
   * Introduce FieldAccessListener.
