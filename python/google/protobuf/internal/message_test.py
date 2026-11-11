@@ -72,6 +72,9 @@ except NameError:
 
 from google.protobuf import map_proto2_unittest_pb2
 from google.protobuf import map_unittest_pb2
+from google.protobuf import struct_pb2
+from google.protobuf import unittest_mset_pb2
+from google.protobuf import unittest_mset_wire_format_pb2
 from google.protobuf import unittest_pb2
 from google.protobuf import unittest_proto3_arena_pb2
 from google.protobuf import descriptor_pb2
@@ -79,10 +82,12 @@ from google.protobuf import descriptor_pool
 from google.protobuf import message_factory
 from google.protobuf import text_format
 from google.protobuf.internal import api_implementation
+from google.protobuf.internal import decoder
 from google.protobuf.internal import encoder
 from google.protobuf.internal import more_extensions_pb2
 from google.protobuf.internal import packed_field_test_pb2
 from google.protobuf.internal import test_util
+from google.protobuf.internal import wire_format
 from google.protobuf.internal import test_proto3_optional_pb2
 from google.protobuf.internal import testing_refleaks
 from google.protobuf import message
@@ -2634,6 +2639,164 @@ class PackedFieldTest(unittest.TestCase):
                    b'\x68\x01'
                    b'\x70\x01')
     self.assertEqual(golden_data, message.SerializeToString())
+
+
+@unittest.skipIf(api_implementation.Type() != 'python',
+                 'recursion limit of the pure-Python parser')
+@testing_refleaks.TestCase
+class PythonRecursionLimitTest(unittest.TestCase):
+  """CVE-2025-4565: nesting depth is bounded in the pure-Python parser."""
+
+  def tearDown(self):
+    decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
+
+  @staticmethod
+  def _LengthDelimited(tag, payload):
+    return tag + encoder._VarintBytes(len(payload)) + payload
+
+  def _NestedMessage(self, depth):
+    # TestRecursiveMessage.a (field 1) nested |depth| times.
+    data = b''
+    for _ in range(depth):
+      data = self._LengthDelimited(b'\x0a', data)
+    return data
+
+  def _NestedGroups(self, depth):
+    # Field 2 as START_GROUP/END_GROUP; unknown to TestAllTypes.
+    return b'\x13' * depth + b'\x14' * depth
+
+  def _NestedMap(self, depth):
+    # TestRecursiveMapMessage.a: map entry (field 1) whose value (field 2)
+    # is again a TestRecursiveMapMessage.
+    data = b''
+    for _ in range(depth):
+      entry = self._LengthDelimited(b'\x12', data)
+      data = self._LengthDelimited(b'\x0a', entry)
+    return data
+
+  def assertTooDeep(self, msg, data):
+    with self.assertRaises(message.DecodeError) as context:
+      msg.ParseFromString(data)
+    self.assertIn('too many levels of nesting', str(context.exception))
+
+  def testNestedMessages(self):
+    unittest_pb2.TestRecursiveMessage().ParseFromString(
+        self._NestedMessage(100))
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(101))
+
+  def testDeepNestedMessagesRaiseDecodeError(self):
+    # Without the limit this exhausts the interpreter stack.
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(sys.getrecursionlimit() * 2))
+
+  def testSetRecursionLimit(self):
+    decoder.SetRecursionLimit(150)
+    unittest_pb2.TestRecursiveMessage().ParseFromString(
+        self._NestedMessage(150))
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(151))
+
+  def testUnknownRecursiveGroups(self):
+    msg = unittest_pb2.TestAllTypes()
+    msg.ParseFromString(self._NestedGroups(50))
+    self.assertTooDeep(unittest_pb2.TestAllTypes(), self._NestedGroups(300))
+    self.assertTooDeep(unittest_pb2.TestAllTypes(),
+                       self._NestedGroups(sys.getrecursionlimit() * 2))
+    decoder.SetRecursionLimit(310)
+    unittest_pb2.TestAllTypes().ParseFromString(self._NestedGroups(300))
+
+  def testDecodeUnknownGroupFieldTooManyLevels(self):
+    data = memoryview(b'\x13' * 100000)
+    with self.assertRaises(message.DecodeError):
+      decoder._DecodeUnknownField(
+          data, 1, wire_format.WIRETYPE_START_GROUP)
+
+  def testSkipGroupTooManyLevels(self):
+    data = memoryview(b'\x13' * 100000)
+    with self.assertRaises(message.DecodeError):
+      decoder.SkipField(data, 1, len(data), b'\x13')
+
+  def testNestedMaps(self):
+    # Each level is a map entry plus its value: two levels of nesting.
+    map_unittest_pb2.TestRecursiveMapMessage().ParseFromString(
+        self._NestedMap(50))
+    self.assertTooDeep(map_unittest_pb2.TestRecursiveMapMessage(),
+                       self._NestedMap(51))
+
+  def testNestedMessageSets(self):
+    # Each level is a MessageSet item plus TestMessageSetExtension1.recursive:
+    # two levels of nesting.
+    def Chain(levels):
+      root = unittest_mset_wire_format_pb2.TestMessageSet()
+      cur = root
+      ext = unittest_mset_pb2.TestMessageSetExtension1.message_set_extension
+      for _ in range(levels):
+        cur = cur.Extensions[ext].recursive
+      cur.Extensions[ext].i = 1
+      return root.SerializeToString()
+    unittest_mset_wire_format_pb2.TestMessageSet().ParseFromString(Chain(49))
+    self.assertTooDeep(unittest_mset_wire_format_pb2.TestMessageSet(),
+                       Chain(50))
+
+  def testNestedKnownGroups(self):
+    # Each level is SubGroup (a group), sub_message, b and a: four levels.
+    def Chain(levels):
+      root = unittest_pb2.TestMutualRecursionA()
+      cur = root
+      for _ in range(levels):
+        cur = cur.subgroup.sub_message.b.a
+      cur.subgroup.not_in_this_scc.optional_int32 = 1
+      return root.SerializeToString()
+    unittest_pb2.TestMutualRecursionA().ParseFromString(Chain(24))
+    self.assertTooDeep(unittest_pb2.TestMutualRecursionA(), Chain(25))
+
+
+@unittest.skipIf(api_implementation.Type() != 'python',
+                 'map sizing of the pure-Python implementation')
+@testing_refleaks.TestCase
+class PythonMapSizeTest(unittest.TestCase):
+  """Message-valued maps are sized in time linear in the nesting depth."""
+
+  @staticmethod
+  def _NestedStruct(depth):
+    msg = struct_pb2.Struct()
+    cur = msg
+    for _ in range(depth):
+      cur = cur.fields['x'].struct_value
+    cur.fields['leaf'].number_value = 1
+    return msg
+
+  def testNestedStructByteSizeIsLinear(self):
+    msg = self._NestedStruct(30)
+    original = struct_pb2.Struct.ByteSize
+    calls = [0]
+    def CountingByteSize(struct_self):
+      calls[0] += 1
+      # Sizing copies doubled the work per level: 2**30 calls at depth 30.
+      if calls[0] > 1000:
+        raise AssertionError('Struct.ByteSize called %d times' % calls[0])
+      return original(struct_self)
+    struct_pb2.Struct.ByteSize = CountingByteSize
+    try:
+      size = msg.ByteSize()
+    finally:
+      struct_pb2.Struct.ByteSize = original
+    self.assertEqual(size, len(msg.SerializeToString()))
+
+  def testMessageMapSizeMatchesSerialization(self):
+    msg = map_unittest_pb2.TestMap()
+    msg.map_int32_foreign_message[0].SetInParent()  # default key, empty value
+    msg.map_int32_foreign_message[-7].c = 5
+    msg.map_int32_foreign_message[300].c = 0
+    self.assertEqual(msg.ByteSize(), len(msg.SerializeToString()))
+    recursive = map_unittest_pb2.TestRecursiveMapMessage()
+    recursive.a[''].a['k'].a['x' * 200].SetInParent()
+    self.assertEqual(recursive.ByteSize(),
+                     len(recursive.SerializeToString()))
+    reparsed = map_unittest_pb2.TestRecursiveMapMessage()
+    reparsed.ParseFromString(recursive.SerializeToString())
+    self.assertEqual(recursive, reparsed)
 
 
 @unittest.skipIf(api_implementation.Type() != 'cpp' or

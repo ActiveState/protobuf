@@ -347,20 +347,31 @@ def MapSizer(field_descriptor, is_message_map):
   # not have been initialized yet.
   message_type = field_descriptor.message_type
   message_sizer = MessageSizer(field_descriptor.number, False, False)
+  tag_size = _TagSize(field_descriptor.number)
+  local_VarintSize = _VarintSize
 
   def FieldSize(map_value):
     total = 0
+    if is_message_map:
+      # A map entry always serializes both its key and its value, so its size
+      # is the sum of the two field sizes. Sizing the value itself (instead of
+      # a copy inside a new entry message, as below) reuses its cached size:
+      # sizing copies re-measured every nested map at every level, which took
+      # time exponential in the nesting depth.
+      key_sizer = message_type.fields_by_name['key']._sizer
+      value_sizer = message_type.fields_by_name['value']._sizer
+      for key in map_value:
+        entry_size = key_sizer(key) + value_sizer(map_value[key])
+        total += tag_size + local_VarintSize(entry_size) + entry_size
+      return total
     for key in map_value:
       value = map_value[key]
       # It's wasteful to create the messages and throw them away one second
       # later since we'll do the same for the actual encode.  But there's not an
       # obvious way to avoid this within the current design without tons of code
-      # duplication. For message map, value.ByteSize() should be called to
-      # update the status.
+      # duplication.
       entry_msg = message_type._concrete_class(key=key, value=value)
       total += message_sizer(entry_msg)
-      if is_message_map:
-        value.ByteSize()
     return total
 
   return FieldSize
