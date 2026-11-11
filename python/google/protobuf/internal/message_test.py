@@ -72,6 +72,7 @@ except NameError:
 
 from google.protobuf import map_proto2_unittest_pb2
 from google.protobuf import map_unittest_pb2
+from google.protobuf import struct_pb2
 from google.protobuf import unittest_mset_pb2
 from google.protobuf import unittest_mset_wire_format_pb2
 from google.protobuf import unittest_pb2
@@ -2749,6 +2750,53 @@ class PythonRecursionLimitTest(unittest.TestCase):
       return root.SerializeToString()
     unittest_pb2.TestMutualRecursionA().ParseFromString(Chain(24))
     self.assertTooDeep(unittest_pb2.TestMutualRecursionA(), Chain(25))
+
+
+@unittest.skipIf(api_implementation.Type() != 'python',
+                 'map sizing of the pure-Python implementation')
+@testing_refleaks.TestCase
+class PythonMapSizeTest(unittest.TestCase):
+  """Message-valued maps are sized in time linear in the nesting depth."""
+
+  @staticmethod
+  def _NestedStruct(depth):
+    msg = struct_pb2.Struct()
+    cur = msg
+    for _ in range(depth):
+      cur = cur.fields['x'].struct_value
+    cur.fields['leaf'].number_value = 1
+    return msg
+
+  def testNestedStructByteSizeIsLinear(self):
+    msg = self._NestedStruct(30)
+    original = struct_pb2.Struct.ByteSize
+    calls = [0]
+    def CountingByteSize(struct_self):
+      calls[0] += 1
+      # Sizing copies doubled the work per level: 2**30 calls at depth 30.
+      if calls[0] > 1000:
+        raise AssertionError('Struct.ByteSize called %d times' % calls[0])
+      return original(struct_self)
+    struct_pb2.Struct.ByteSize = CountingByteSize
+    try:
+      size = msg.ByteSize()
+    finally:
+      struct_pb2.Struct.ByteSize = original
+    self.assertEqual(size, len(msg.SerializeToString()))
+
+  def testMessageMapSizeMatchesSerialization(self):
+    msg = map_unittest_pb2.TestMap()
+    msg.map_int32_foreign_message[0].SetInParent()  # default key, empty value
+    msg.map_int32_foreign_message[-7].c = 5
+    msg.map_int32_foreign_message[300].c = 0
+    self.assertEqual(msg.ByteSize(), len(msg.SerializeToString()))
+    recursive = map_unittest_pb2.TestRecursiveMapMessage()
+    recursive.a[''].a['k'].a['x' * 200].SetInParent()
+    self.assertEqual(recursive.ByteSize(),
+                     len(recursive.SerializeToString()))
+    reparsed = map_unittest_pb2.TestRecursiveMapMessage()
+    reparsed.ParseFromString(recursive.SerializeToString())
+    self.assertEqual(recursive, reparsed)
 
 
 @unittest.skipIf(api_implementation.Type() != 'cpp' or
