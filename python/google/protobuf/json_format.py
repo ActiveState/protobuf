@@ -425,7 +425,9 @@ def Parse(text,
         default.
     max_recursion_depth: max recursion depth of JSON message to be
       deserialized. JSON messages over this depth will fail to be
-      deserialized. Default value is 100.
+      deserialized. Default value is 100. Each level uses several Python
+      stack frames, so a limit above about 150 can end in RuntimeError
+      (RecursionError on Python 3) instead of ParseError.
 
   Returns:
     The same message passed as argument.
@@ -462,7 +464,9 @@ def ParseDict(js_dict,
       default.
     max_recursion_depth: max recursion depth of JSON message to be
       deserialized. JSON messages over this depth will fail to be
-      deserialized. Default value is 100.
+      deserialized. Default value is 100. Each level uses several Python
+      stack frames, so a limit above about 150 can end in RuntimeError
+      (RecursionError on Python 3) instead of ParseError.
 
   Returns:
     The same message passed as argument.

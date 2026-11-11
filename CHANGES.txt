@@ -18,7 +18,8 @@
   * CVE-2025-4565 / GHSA-8qvm-5x2c-j2w7: the pure-Python parser now limits
     nesting of messages, groups, map entries, MessageSet items and unknown
     groups to 100 and raises DecodeError past it, instead of exhausting the
-    interpreter stack. decoder.SetRecursionLimit() changes the limit.
+    interpreter stack. decoder.SetRecursionLimit() changes the limit for the
+    pure-Python backend only; the C++ backend keeps its own limit of 100.
   * CVE-2026-0994 / GHSA-7gcm-g887-7qv7: json_format.Parse()/ParseDict() take
     max_recursion_depth (default 100) and raise ParseError past it, including
     through nested google.protobuf.Any, Struct and ListValue. Struct and
@@ -31,6 +32,19 @@
     every value). A ~250-byte JSON google.protobuf.Any wrapping a nested
     Struct took hours to parse; it now takes milliseconds. Upstream still
     has this.
+
+  Known limits (unchanged from upstream, not covered by any advisory)
+  * Parsing never opens a google.protobuf.Any payload, so a deep chain of
+    Any values parses, but printing it (json_format.MessageToJson,
+    text_format.MessageToString, and str() on the pure-Python backend)
+    recurses into each payload and can raise RuntimeError.
+  * text_format.MessageToString(..., print_unknown_fields=True) decodes
+    unknown length-delimited fields as messages without a depth limit.
+  * text_format.Parse()/Merge() have no depth limit. Upstream added an
+    opt-in max_recursion_depth (default off) after 3.17; it is not
+    backported here.
+  * json_format max_recursion_depth values above about 150 can exhaust the
+    Python stack and raise RuntimeError instead of ParseError.
 
 2021-06-04 version 3.17.3 (C++/Java/Python/PHP/Objective-C/C#/Ruby/JavaScript)
   C++

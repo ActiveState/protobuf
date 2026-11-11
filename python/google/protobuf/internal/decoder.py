@@ -996,7 +996,11 @@ _recursion_limit = DEFAULT_RECURSION_LIMIT
 
 
 def SetRecursionLimit(new_limit):
-  """Sets the nesting depth the pure-Python parser accepts."""
+  """Sets the nesting depth the pure-Python parser accepts.
+
+  Only the pure-Python backend reads this; the C++ backend keeps its own
+  limit of 100.
+  """
   global _recursion_limit
   _recursion_limit = new_limit
 
