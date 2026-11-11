@@ -72,6 +72,8 @@ except NameError:
 
 from google.protobuf import map_proto2_unittest_pb2
 from google.protobuf import map_unittest_pb2
+from google.protobuf import unittest_mset_pb2
+from google.protobuf import unittest_mset_wire_format_pb2
 from google.protobuf import unittest_pb2
 from google.protobuf import unittest_proto3_arena_pb2
 from google.protobuf import descriptor_pb2
@@ -2720,6 +2722,33 @@ class PythonRecursionLimitTest(unittest.TestCase):
         self._NestedMap(50))
     self.assertTooDeep(map_unittest_pb2.TestRecursiveMapMessage(),
                        self._NestedMap(51))
+
+  def testNestedMessageSets(self):
+    # Each level is a MessageSet item plus TestMessageSetExtension1.recursive:
+    # two levels of nesting.
+    def Chain(levels):
+      root = unittest_mset_wire_format_pb2.TestMessageSet()
+      cur = root
+      ext = unittest_mset_pb2.TestMessageSetExtension1.message_set_extension
+      for _ in range(levels):
+        cur = cur.Extensions[ext].recursive
+      cur.Extensions[ext].i = 1
+      return root.SerializeToString()
+    unittest_mset_wire_format_pb2.TestMessageSet().ParseFromString(Chain(49))
+    self.assertTooDeep(unittest_mset_wire_format_pb2.TestMessageSet(),
+                       Chain(50))
+
+  def testNestedKnownGroups(self):
+    # Each level is SubGroup (a group), sub_message, b and a: four levels.
+    def Chain(levels):
+      root = unittest_pb2.TestMutualRecursionA()
+      cur = root
+      for _ in range(levels):
+        cur = cur.subgroup.sub_message.b.a
+      cur.subgroup.not_in_this_scc.optional_int32 = 1
+      return root.SerializeToString()
+    unittest_pb2.TestMutualRecursionA().ParseFromString(Chain(24))
+    self.assertTooDeep(unittest_pb2.TestMutualRecursionA(), Chain(25))
 
 
 @unittest.skipIf(api_implementation.Type() != 'cpp' or
