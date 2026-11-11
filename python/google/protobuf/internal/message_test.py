@@ -79,10 +79,12 @@ from google.protobuf import descriptor_pool
 from google.protobuf import message_factory
 from google.protobuf import text_format
 from google.protobuf.internal import api_implementation
+from google.protobuf.internal import decoder
 from google.protobuf.internal import encoder
 from google.protobuf.internal import more_extensions_pb2
 from google.protobuf.internal import packed_field_test_pb2
 from google.protobuf.internal import test_util
+from google.protobuf.internal import wire_format
 from google.protobuf.internal import test_proto3_optional_pb2
 from google.protobuf.internal import testing_refleaks
 from google.protobuf import message
@@ -2634,6 +2636,90 @@ class PackedFieldTest(unittest.TestCase):
                    b'\x68\x01'
                    b'\x70\x01')
     self.assertEqual(golden_data, message.SerializeToString())
+
+
+@unittest.skipIf(api_implementation.Type() != 'python',
+                 'recursion limit of the pure-Python parser')
+@testing_refleaks.TestCase
+class PythonRecursionLimitTest(unittest.TestCase):
+  """CVE-2025-4565: nesting depth is bounded in the pure-Python parser."""
+
+  def tearDown(self):
+    decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
+
+  @staticmethod
+  def _LengthDelimited(tag, payload):
+    return tag + encoder._VarintBytes(len(payload)) + payload
+
+  def _NestedMessage(self, depth):
+    # TestRecursiveMessage.a (field 1) nested |depth| times.
+    data = b''
+    for _ in range(depth):
+      data = self._LengthDelimited(b'\x0a', data)
+    return data
+
+  def _NestedGroups(self, depth):
+    # Field 2 as START_GROUP/END_GROUP; unknown to TestAllTypes.
+    return b'\x13' * depth + b'\x14' * depth
+
+  def _NestedMap(self, depth):
+    # TestRecursiveMapMessage.a: map entry (field 1) whose value (field 2)
+    # is again a TestRecursiveMapMessage.
+    data = b''
+    for _ in range(depth):
+      entry = self._LengthDelimited(b'\x12', data)
+      data = self._LengthDelimited(b'\x0a', entry)
+    return data
+
+  def assertTooDeep(self, msg, data):
+    with self.assertRaises(message.DecodeError) as context:
+      msg.ParseFromString(data)
+    self.assertIn('too many levels of nesting', str(context.exception))
+
+  def testNestedMessages(self):
+    unittest_pb2.TestRecursiveMessage().ParseFromString(
+        self._NestedMessage(100))
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(101))
+
+  def testDeepNestedMessagesRaiseDecodeError(self):
+    # Without the limit this exhausts the interpreter stack.
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(sys.getrecursionlimit() * 2))
+
+  def testSetRecursionLimit(self):
+    decoder.SetRecursionLimit(150)
+    unittest_pb2.TestRecursiveMessage().ParseFromString(
+        self._NestedMessage(150))
+    self.assertTooDeep(unittest_pb2.TestRecursiveMessage(),
+                       self._NestedMessage(151))
+
+  def testUnknownRecursiveGroups(self):
+    msg = unittest_pb2.TestAllTypes()
+    msg.ParseFromString(self._NestedGroups(50))
+    self.assertTooDeep(unittest_pb2.TestAllTypes(), self._NestedGroups(300))
+    self.assertTooDeep(unittest_pb2.TestAllTypes(),
+                       self._NestedGroups(sys.getrecursionlimit() * 2))
+    decoder.SetRecursionLimit(310)
+    unittest_pb2.TestAllTypes().ParseFromString(self._NestedGroups(300))
+
+  def testDecodeUnknownGroupFieldTooManyLevels(self):
+    data = memoryview(b'\x13' * 100000)
+    with self.assertRaises(message.DecodeError):
+      decoder._DecodeUnknownField(
+          data, 1, wire_format.WIRETYPE_START_GROUP)
+
+  def testSkipGroupTooManyLevels(self):
+    data = memoryview(b'\x13' * 100000)
+    with self.assertRaises(message.DecodeError):
+      decoder.SkipField(data, 1, len(data), b'\x13')
+
+  def testNestedMaps(self):
+    # Each level is a map entry plus its value: two levels of nesting.
+    map_unittest_pb2.TestRecursiveMapMessage().ParseFromString(
+        self._NestedMap(50))
+    self.assertTooDeep(map_unittest_pb2.TestRecursiveMapMessage(),
+                       self._NestedMap(51))
 
 
 @unittest.skipIf(api_implementation.Type() != 'cpp' or

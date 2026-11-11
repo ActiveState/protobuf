@@ -1152,7 +1152,7 @@ def _AddMergeFromStringMethod(message_descriptor, cls):
   local_SkipField = decoder.SkipField
   decoders_by_tag = cls._decoders_by_tag
 
-  def InternalParse(self, buffer, pos, end):
+  def InternalParse(self, buffer, pos, end, current_depth=0):
     """Create a message from serialized bytes.
 
     Args:
@@ -1160,6 +1160,7 @@ def _AddMergeFromStringMethod(message_descriptor, cls):
       buffer: memoryview of the serialized data.
       pos: int, position to start in the serialized data.
       end: int, end position of the serialized data.
+      current_depth: int, how many messages/groups enclose this one.
 
     Returns:
       Message object.
@@ -1190,20 +1191,23 @@ def _AddMergeFromStringMethod(message_descriptor, cls):
         # TODO(jieluo): remove old_pos.
         old_pos = new_pos
         (data, new_pos) = decoder._DecodeUnknownField(
-            buffer, new_pos, wire_type)  # pylint: disable=protected-access
+            buffer, new_pos, wire_type,
+            current_depth)  # pylint: disable=protected-access
         if new_pos == -1:
           return pos
         # pylint: disable=protected-access
         unknown_field_set._add(field_number, wire_type, data)
         # TODO(jieluo): remove _unknown_fields.
-        new_pos = local_SkipField(buffer, old_pos, end, tag_bytes)
+        new_pos = local_SkipField(buffer, old_pos, end, tag_bytes,
+                                  current_depth)
         if new_pos == -1:
           return pos
         self._unknown_fields.append(
             (tag_bytes, buffer[old_pos:new_pos].tobytes()))
         pos = new_pos
       else:
-        pos = field_decoder(buffer, new_pos, end, self, field_dict)
+        pos = field_decoder(buffer, new_pos, end, self, field_dict,
+                            current_depth)
         if field_desc:
           self._UpdateOneofState(field_desc)
     return pos
