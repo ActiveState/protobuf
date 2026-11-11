@@ -1258,6 +1258,73 @@ class JsonFormatTest(JsonFormatBase):
                     'uint32Value': 4, 'stringValue': 'bla'},
                    indent=2, sort_keys=True))
 
+  def testNestedRecursiveLimit(self):
+    message = unittest_pb2.NestedTestAllTypes()
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 3',
+        json_format.Parse,
+        '{"child": {"child": {"child" : {}}}}',
+        message,
+        max_recursion_depth=3)
+    # The following one can pass
+    json_format.Parse('{"payload": {}, "child": {"child":{}}}',
+                      message, max_recursion_depth=3)
+
+  @staticmethod
+  def _NestedAny(depth):
+    value = {}
+    for _ in range(depth):
+      value = {'@type': 'type.googleapis.com/google.protobuf.Any',
+               'value': value}
+    return value
+
+  def testAnyRecursionDepthEnforcement(self):
+    # CVE-2026-0994: nested Any must not bypass max_recursion_depth.
+    message = any_pb2.Any()
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 5',
+        json_format.ParseDict,
+        self._NestedAny(5),
+        message,
+        max_recursion_depth=5)
+    # Nesting up to depth 4 is allowed with max_recursion_depth=5.
+    json_format.ParseDict(self._NestedAny(4), message, max_recursion_depth=5)
+
+  def testAnyRecursionDepthDefaultLimit(self):
+    # Deep enough to exhaust the interpreter stack without the limit.
+    message = any_pb2.Any()
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 100',
+        json_format.ParseDict,
+        self._NestedAny(sys.getrecursionlimit()),
+        message)
+
+  def testStructRecursionDepthEnforcement(self):
+    # Struct and ListValue nesting must not bypass max_recursion_depth.
+    nested_struct = {}
+    nested_list = []
+    for _ in range(sys.getrecursionlimit()):
+      nested_struct = {'a': nested_struct}
+      nested_list = [nested_list]
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 100',
+        json_format.ParseDict, nested_struct, struct_pb2.Struct())
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 100',
+        json_format.ParseDict, nested_list, struct_pb2.ListValue())
+    self.assertRaisesRegexp(
+        json_format.ParseError,
+        'Message too deep. Max recursion depth is 3',
+        json_format.ParseDict, {'a': {'b': {'c': {}}}}, struct_pb2.Struct(),
+        max_recursion_depth=3)
+    json_format.ParseDict({'a': {'b': {}}}, struct_pb2.Struct(),
+                          max_recursion_depth=3)
+
 
 if __name__ == '__main__':
   unittest.main()
