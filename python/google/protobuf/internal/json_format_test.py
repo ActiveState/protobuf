@@ -1271,6 +1271,14 @@ class JsonFormatTest(JsonFormatBase):
     json_format.Parse('{"payload": {}, "child": {"child":{}}}',
                       message, max_recursion_depth=3)
 
+  def testParseTextTooDeepForJsonModule(self):
+    # json.loads itself runs out of stack on this; callers still get
+    # ParseError rather than RuntimeError/RecursionError.
+    depth = sys.getrecursionlimit() * 2
+    text = '{"a":' * depth + '1' + '}' * depth
+    self.assertRaises(json_format.ParseError, json_format.Parse, text,
+                      struct_pb2.Struct())
+
   @staticmethod
   def _NestedAny(depth):
     value = {}

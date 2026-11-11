@@ -438,6 +438,11 @@ def Parse(text,
     js = json.loads(text, object_pairs_hook=_DuplicateChecker)
   except ValueError as e:
     raise ParseError('Failed to load JSON: {0}.'.format(str(e)))
+  except RuntimeError as e:
+    # The json module recurses once per nesting level and raises RuntimeError
+    # (RecursionError on Python 3) on text nested past the interpreter's
+    # recursion limit, before max_recursion_depth is ever checked.
+    raise ParseError('Failed to load JSON: {0}.'.format(str(e)))
   return ParseDict(js, message, ignore_unknown_fields, descriptor_pool,
                    max_recursion_depth)
 
