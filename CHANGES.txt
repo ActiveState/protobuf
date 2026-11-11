@@ -7,6 +7,12 @@
     duplicate type_id or message fields could build a corrupted extension and
     crash later. The parsers now keep the first type_id and payload and skip
     duplicates (upstream 3.18.3).
+    The fix is in the C++ library, so it only protects a Python install whose
+    _message extension is linked against this tree's libprotobuf: build it
+    with --cpp_implementation --compile_static_extension (as upstream's PyPI
+    wheels are), or ship the patched libprotobuf with it. An extension linked
+    to an unpatched system libprotobuf.so stays vulnerable. A pure-Python
+    install does not use this code.
 
   Python
   * CVE-2025-4565 / GHSA-8qvm-5x2c-j2w7: the pure-Python parser now limits
@@ -15,7 +21,16 @@
     interpreter stack. decoder.SetRecursionLimit() changes the limit.
   * CVE-2026-0994 / GHSA-7gcm-g887-7qv7: json_format.Parse()/ParseDict() take
     max_recursion_depth (default 100) and raise ParseError past it, including
-    through nested google.protobuf.Any, Struct and ListValue.
+    through nested google.protobuf.Any, Struct and ListValue. Struct and
+    ListValue levels count toward the limit, which upstream does not do: a
+    Struct nested more than 100 deep now needs a larger max_recursion_depth.
+    Parse() also raises ParseError, not RuntimeError, when the json module
+    runs out of stack on very deeply nested text.
+  * Sizing a message-valued map in the pure-Python backend no longer takes
+    time exponential in the nesting depth (each level re-measured a copy of
+    every value). A ~250-byte JSON google.protobuf.Any wrapping a nested
+    Struct took hours to parse; it now takes milliseconds. Upstream still
+    has this.
 
 2021-06-04 version 3.17.3 (C++/Java/Python/PHP/Objective-C/C#/Ruby/JavaScript)
   C++
